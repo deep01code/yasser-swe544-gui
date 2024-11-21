@@ -20,4 +20,4 @@ nohup java -DADDRESS=localhost \
   -DDOOR_CLUSTER_NUMBER=${IDENTIFIER%-instance*} \
   -DINSTANCE_NUMBER=${IDENTIFIER#*-instance} \
   -DIDENTIFIER=$IDENTIFIER \
-  -jar swe544-0.0.1-SNAPSHOT.jar > /dev/null 2>&1 &
+  -jar swe544-1.0-SNAPSHOT.jar > /dev/null 2>&1 &

@@ -32,11 +32,14 @@ public class DoorMonitoringApp {
     private static final Map<Integer, JTextField> masterInstanceFields = new HashMap<>();
     private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws InterruptedException {
+
+        runCluster();
+        Thread.sleep(3000);
         // Initialize Zookeeper connection in a separate thread
         executorService.submit(() -> {
             try {
-                zooKeeper = new ZooKeeper("localhost:2181", 3000, null);
+                zooKeeper = new ZooKeeper("localhost:2181", 30000, null);
             } catch (Exception e) {
                 System.err.println("Failed to connect to Zookeeper: " + e.getMessage());
             }
@@ -69,7 +72,7 @@ public class DoorMonitoringApp {
             // Add Restart Cluster buttons
             for (int i = 1; i <= 4; i++) {
                 int doorNumber = i; // Capture doorNumber for lambda
-                JButton button = new JButton("Restart Cluster " + doorNumber);
+                JButton button = new JButton("Restart Cluster Master  " + doorNumber);
                 button.addActionListener(e -> restartMasterInstance(doorNumber));
                 buttonsPanel.add(button);
             }
@@ -96,6 +99,22 @@ public class DoorMonitoringApp {
             frame.setMinimumSize(new Dimension(800, 600));
             frame.setVisible(true);
         });
+
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            shutdownAllClusters();
+            //put your logic here
+
+            try {
+                if (zooKeeper != null) {
+                    zooKeeper.close();
+                }
+                executorService.shutdownNow();
+                scheduler.shutdownNow();
+            } catch (Exception e) {
+                System.err.println("Error during shutdown: " + e.getMessage());
+            }
+        }));
     }
 
     private static JPanel createDoorPanel(int doorNumber) {
@@ -220,7 +239,7 @@ public class DoorMonitoringApp {
                 String pid = findProcessByIdentifier(PID_Identifier);
                 if (pid != null) {
                     System.out.println("Found process PID: " + pid + " for " + PID_Identifier);
-                  //  killProcess(pid);
+                    //  killProcess(pid);
                 } else {
                     System.out.println("No process found for " + masterInstanceNumber);
                 }
