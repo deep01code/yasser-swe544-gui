@@ -10,20 +10,27 @@ import org.apache.zookeeper.data.Stat;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.List;
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.time.Duration;
-import java.util.Collections;
-import java.util.Properties;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.*;
 public class DoorMonitoringApp {
     private static final String BOOTSTRAP_SERVERS = "localhost:9092";
     private static final String GROUP_ID = "2";
     private static final String RUN_SCRIPT = "./restartInstance.sh";
+    private static final String RUN_SCRIPT_RUN_CLUSTER = "./runCluster.sh";
+    private static final String RUN_SCRIPT_SHUTDOWNALL = "./shutdownCluster.sh";
     private static ZooKeeper zooKeeper;
     private static final ExecutorService executorService = Executors.newCachedThreadPool();
+    private static final Map<Integer, JTextField> masterInstanceFields = new HashMap<>();
+    private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
     public static void main(String[] args) {
         // Initialize Zookeeper connection in a separate thread
@@ -39,30 +46,54 @@ public class DoorMonitoringApp {
         SwingUtilities.invokeLater(() -> {
             JFrame frame = new JFrame("Door Monitoring System");
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-            frame.setSize(1200, 800);
+
+            // Set frame to take up 90% of screen size
+            Dimension screenSize = Toolkit.getDefaultToolkit().getScreenSize();
+            int width = (int) (screenSize.width * 0.9);
+            int height = (int) (screenSize.height * 0.9);
+            frame.setSize(width, height);
             frame.setLayout(new BorderLayout(10, 10));
 
+            // Main panel for door panels
             JPanel mainPanel = new JPanel();
             mainPanel.setLayout(new GridLayout(1, 4, 20, 0));
-            frame.add(mainPanel, BorderLayout.CENTER);
-
             for (int i = 1; i <= 4; i++) {
                 mainPanel.add(createDoorPanel(i));
             }
+            frame.add(new JScrollPane(mainPanel), BorderLayout.CENTER);
 
+            // Buttons panel
             JPanel buttonsPanel = new JPanel();
             buttonsPanel.setLayout(new FlowLayout(FlowLayout.CENTER, 20, 10));
+
+            // Add Restart Cluster buttons
             for (int i = 1; i <= 4; i++) {
-                for (int instanceNumber = 1; instanceNumber <= 3; instanceNumber++) {
-                    int doorNumber = i; // Capture doorNumber for lambda
-                    int instance = instanceNumber; // Capture instanceNumber for lambda
-                    JButton button = new JButton("Restart Door " + doorNumber + " Instance " + instance);
-                    button.addActionListener(e -> restartMasterInstance(doorNumber, instance));
-                    buttonsPanel.add(button);
-                }
+                int doorNumber = i; // Capture doorNumber for lambda
+                JButton button = new JButton("Restart Cluster " + doorNumber);
+                button.addActionListener(e -> restartMasterInstance(doorNumber));
+                buttonsPanel.add(button);
             }
+
+            // Add new buttons for scripts
+            JButton buttonScript1 = new JButton("Run All Nodes");
+            buttonScript1.setPreferredSize(new Dimension(150, 40));
+            buttonScript1.addActionListener(e -> runCluster());
+
+            JButton buttonScript2 = new JButton("Shutdown All Nodes");
+            buttonScript2.setPreferredSize(new Dimension(150, 40));
+            buttonScript2.addActionListener(e -> shutdownAllClusters());
+
+            buttonsPanel.add(buttonScript1);
+            buttonsPanel.add(buttonScript2);
+
             frame.add(buttonsPanel, BorderLayout.SOUTH);
 
+            // Add the process monitor panel
+            JPanel processMonitorPanel = createProcessMonitorPanel();
+            frame.add(processMonitorPanel, BorderLayout.EAST);
+
+            // Ensure components resize properly
+            frame.setMinimumSize(new Dimension(800, 600));
             frame.setVisible(true);
         });
     }
@@ -82,6 +113,9 @@ public class DoorMonitoringApp {
         JTextField masterInstanceField = new JTextField();
         masterInstanceField.setEditable(false);
         masterInstanceField.setMaximumSize(new Dimension(200, 30));
+
+        // Save the masterInstanceField for this doorNumber in the map
+        masterInstanceFields.put(doorNumber, masterInstanceField);
 
         String masterInstanceNodePath = "/door" + doorNumber;
         String carCountNodePath = "/door" + doorNumber + "counter";
@@ -164,24 +198,36 @@ public class DoorMonitoringApp {
         }
     }
 
-    private static void restartMasterInstance(int doorNumber, int instanceNumber) {
+    private static void restartMasterInstance(int doorNumber) {
         executorService.submit(() -> {
             try {
-                String masterInstance = "door" + doorNumber + "-instance" + instanceNumber;
-                System.out.println("Attempting to restart instance: " + masterInstance);
+                // Dynamically fetch the content of the associated masterInstanceField
+                JTextField masterInstanceField = masterInstanceFields.get(doorNumber);
+                if (masterInstanceField == null) {
+                    System.err.println("No master instance field found for Door " + doorNumber);
+                    return;
+                }
 
+                String masterInstanceNumber = masterInstanceField.getText();
+                if (masterInstanceNumber == null || masterInstanceNumber.isEmpty()) {
+                    System.err.println("Master instance value is empty for Door " + doorNumber);
+                    return;
+                }
+
+                System.out.println("Attempting to restart instance: " + masterInstanceNumber);
+                String PID_Identifier="door"+doorNumber+"-instance"+masterInstanceNumber;
                 // Identify and kill the process
-                String pid = findProcessByIdentifier(masterInstance);
+                String pid = findProcessByIdentifier(PID_Identifier);
                 if (pid != null) {
-                    System.out.println("Found process PID: " + pid + " for " + masterInstance);
-                    killProcess(pid);
+                    System.out.println("Found process PID: " + pid + " for " + PID_Identifier);
+                  //  killProcess(pid);
                 } else {
-                    System.out.println("No process found for " + masterInstance);
+                    System.out.println("No process found for " + masterInstanceNumber);
                 }
 
                 // Restart the instance
-                restartInstance(masterInstance);
-                System.out.println(masterInstance + " has been restarted.");
+                restartInstance(PID_Identifier);
+                System.out.println(masterInstanceNumber + " has been restarted.");
             } catch (Exception e) {
                 System.err.println("Failed to restart instance: " + e.getMessage());
             }
@@ -210,4 +256,109 @@ public class DoorMonitoringApp {
     private static void restartInstance(String identifier) throws Exception {
         new ProcessBuilder(RUN_SCRIPT, identifier).inheritIO().start().waitFor();
     }
+
+    private static void runCluster() {
+        try {
+            new ProcessBuilder(RUN_SCRIPT_RUN_CLUSTER).inheritIO().start().waitFor();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static void shutdownAllClusters()  {
+        try {
+            new ProcessBuilder(RUN_SCRIPT_SHUTDOWNALL).inheritIO().start().waitFor();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+//todo
+
+    private static JPanel createProcessMonitorPanel() {
+        JPanel panel = new JPanel();
+        panel.setBorder(BorderFactory.createTitledBorder("Java Process Monitor"));
+        panel.setLayout(new BorderLayout());
+
+        JTextArea processOutput = new JTextArea();
+        processOutput.setEditable(false);
+        processOutput.setLineWrap(true);
+        processOutput.setWrapStyleWord(true);
+        JScrollPane scrollPane = new JScrollPane(processOutput);
+
+        panel.add(scrollPane, BorderLayout.CENTER);
+
+        // Schedule periodic updates every second
+        scheduler.scheduleAtFixedRate(() -> {
+            String processes = fetchJavaProcesses();
+            SwingUtilities.invokeLater(() -> processOutput.setText(processes));
+        }, 0, 1, TimeUnit.SECONDS);
+
+        return panel;
+    }
+
+    private static String fetchJavaProcesses() {
+        class ProcessInfo {
+            String pid;
+            String identifier;
+
+            ProcessInfo(String pid, String identifier) {
+                this.pid = pid;
+                this.identifier = identifier;
+            }
+
+            @Override
+            public String toString() {
+                return "PID: " + pid + " | " + identifier;
+            }
+        }
+
+        ArrayList<ProcessInfo> processes = new ArrayList<>();
+        try {
+            ProcessBuilder processBuilder = new ProcessBuilder("sh", "-c", "ps aux | grep java | grep -v grep");
+            Process process = processBuilder.start();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String[] parts = line.trim().split("\\s+");
+                    if (parts.length > 10) {
+                        String pid = parts[1]; // PID is in the second column
+                        String identifier = extractIdentifier(line); // Extract -DIDENTIFIER value
+                        if (identifier != null) {
+                            processes.add(new ProcessInfo(pid, identifier));
+                        }
+                    }
+                }
+            }
+
+            // Sort the processes by PID (numeric order)
+            processes.sort(Comparator.comparingInt(p -> Integer.parseInt(p.pid)));
+
+        } catch (Exception e) {
+            return "Error fetching processes: " + e.getMessage();
+        }
+
+        // Build the output string
+        StringBuilder output = new StringBuilder();
+        for (ProcessInfo process : processes) {
+            output.append(process).append("\n");
+        }
+
+        return output.toString();
+    }
+
+    private static String extractIdentifier(String processLine) {
+        String[] parts = processLine.split("\\s+");
+        for (String part : parts) {
+            if (part.startsWith("-DIDENTIFIER=")) {
+                return part; // Return the entire -DIDENTIFIER=value
+            }
+        }
+        return null;
+    }
+
 }
