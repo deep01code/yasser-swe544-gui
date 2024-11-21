@@ -10,6 +10,8 @@ import org.apache.zookeeper.data.Stat;
 
 import javax.swing.*;
 import java.awt.*;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.Properties;
@@ -19,6 +21,7 @@ import java.util.concurrent.Executors;
 public class DoorMonitoringApp {
     private static final String BOOTSTRAP_SERVERS = "localhost:9092";
     private static final String GROUP_ID = "2";
+    private static final String RUN_SCRIPT = "./restartInstance.sh";
     private static ZooKeeper zooKeeper;
     private static final ExecutorService executorService = Executors.newCachedThreadPool();
 
@@ -50,8 +53,9 @@ public class DoorMonitoringApp {
             JPanel buttonsPanel = new JPanel();
             buttonsPanel.setLayout(new FlowLayout(FlowLayout.CENTER, 20, 10));
             for (int i = 1; i <= 4; i++) {
-                JButton button = new JButton("Button " + i);
-                button.setPreferredSize(new Dimension(100, 40));
+                int doorNumber = i;
+                JButton button = new JButton("Restart Door " + i + " Master");
+                button.addActionListener(e -> restartMasterInstance(doorNumber));
                 buttonsPanel.add(button);
             }
             frame.add(buttonsPanel, BorderLayout.SOUTH);
@@ -118,7 +122,7 @@ public class DoorMonitoringApp {
             consumer.subscribe(Collections.singletonList(topic));
 
             while (true) {
-                ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
+                ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
                 for (ConsumerRecord<String, String> record : records) {
                     SwingUtilities.invokeLater(() -> terminalOutput.append(record.value() + "\n"));
                     consumer.commitSync();
@@ -141,5 +145,43 @@ public class DoorMonitoringApp {
         } catch (Exception e) {
             SwingUtilities.invokeLater(() -> field.setText("Error: " + e.getMessage()));
         }
+    }
+
+    private static void restartMasterInstance(int doorNumber) {
+        executorService.submit(() -> {
+            try {
+                String masterInstance = "door" + doorNumber + "-instance1"; // Mock; replace with actual logic.
+                String pid = findProcessByIdentifier(masterInstance);
+                if (pid != null) {
+                    killProcess(pid);
+                    restartInstance(masterInstance);
+                }
+            } catch (Exception e) {
+                System.err.println("Failed to restart: " + e.getMessage());
+            }
+        });
+    }
+
+    private static String findProcessByIdentifier(String identifier) throws Exception {
+        ProcessBuilder processBuilder = new ProcessBuilder("sh", "-c", "ps aux | grep " + identifier + " | grep -v grep");
+        Process process = processBuilder.start();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String[] parts = line.trim().split("\\s+");
+                if (parts.length > 1) {
+                    return parts[1];
+                }
+            }
+        }
+        return null;
+    }
+
+    private static void killProcess(String pid) throws Exception {
+        new ProcessBuilder("kill", "-9", pid).inheritIO().start().waitFor();
+    }
+
+    private static void restartInstance(String identifier) throws Exception {
+        new ProcessBuilder(RUN_SCRIPT, identifier).inheritIO().start().waitFor();
     }
 }
