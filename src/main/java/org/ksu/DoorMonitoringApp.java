@@ -53,10 +53,13 @@ public class DoorMonitoringApp {
             JPanel buttonsPanel = new JPanel();
             buttonsPanel.setLayout(new FlowLayout(FlowLayout.CENTER, 20, 10));
             for (int i = 1; i <= 4; i++) {
-                int doorNumber = i;
-                JButton button = new JButton("Restart Door " + i + " Master");
-                button.addActionListener(e -> restartMasterInstance(doorNumber));
-                buttonsPanel.add(button);
+                for (int instanceNumber = 1; instanceNumber <= 3; instanceNumber++) {
+                    int doorNumber = i; // Capture doorNumber for lambda
+                    int instance = instanceNumber; // Capture instanceNumber for lambda
+                    JButton button = new JButton("Restart Door " + doorNumber + " Instance " + instance);
+                    button.addActionListener(e -> restartMasterInstance(doorNumber, instance));
+                    buttonsPanel.add(button);
+                }
             }
             frame.add(buttonsPanel, BorderLayout.SOUTH);
 
@@ -83,8 +86,9 @@ public class DoorMonitoringApp {
         String masterInstanceNodePath = "/door" + doorNumber;
         String carCountNodePath = "/door" + doorNumber + "counter";
 
-        executorService.submit(() -> watchZookeeperNode(masterInstanceNodePath, masterInstanceField));
-        executorService.submit(() -> watchZookeeperNode(carCountNodePath, carCountField));
+        // Set up persistent watchers and initialize fields
+        executorService.submit(() -> addPersistentWatcher(masterInstanceNodePath, masterInstanceField));
+        executorService.submit(() -> addPersistentWatcher(carCountNodePath, carCountField));
 
         JLabel terminalLabel = new JLabel("Cars/Event Arrive -> Door" + doorNumber);
         JTextArea terminalOutput = new JTextArea();
@@ -133,31 +137,53 @@ public class DoorMonitoringApp {
         }
     }
 
-    private static void watchZookeeperNode(String nodePath, JTextField field) {
+    private static void addPersistentWatcher(String nodePath, JTextField field) {
         try {
-            byte[] data = zooKeeper.getData(nodePath, event -> {
-                if (event.getType() == Watcher.Event.EventType.NodeDataChanged) {
-                    executorService.submit(() -> watchZookeeperNode(nodePath, field));
-                }
-            }, new Stat());
+            // Fetch initial value to populate the field
+            byte[] initialData = zooKeeper.getData(nodePath, false, new Stat());
+            SwingUtilities.invokeLater(() -> field.setText(new String(initialData)));
 
-            SwingUtilities.invokeLater(() -> field.setText(new String(data)));
+            // Add persistent watcher
+            zooKeeper.addWatch(nodePath, event -> {
+                if (event.getType() == Watcher.Event.EventType.NodeDataChanged
+                        || event.getType() == Watcher.Event.EventType.NodeCreated
+                        || event.getType() == Watcher.Event.EventType.NodeDeleted
+                ) {
+                    try {
+                        byte[] updatedData = zooKeeper.getData(nodePath, false, new Stat());
+                        SwingUtilities.invokeLater(() -> field.setText(new String(updatedData)));
+                    } catch (Exception e) {
+                        SwingUtilities.invokeLater(() -> field.setText("Error: " + e.getMessage()));
+                    }
+                }
+            }, AddWatchMode.PERSISTENT);
+        } catch (KeeperException.NoNodeException e) {
+            SwingUtilities.invokeLater(() -> field.setText("Node not found"));
         } catch (Exception e) {
             SwingUtilities.invokeLater(() -> field.setText("Error: " + e.getMessage()));
         }
     }
 
-    private static void restartMasterInstance(int doorNumber) {
+    private static void restartMasterInstance(int doorNumber, int instanceNumber) {
         executorService.submit(() -> {
             try {
-                String masterInstance = "door" + doorNumber + "-instance1"; // Mock; replace with actual logic.
+                String masterInstance = "door" + doorNumber + "-instance" + instanceNumber;
+                System.out.println("Attempting to restart instance: " + masterInstance);
+
+                // Identify and kill the process
                 String pid = findProcessByIdentifier(masterInstance);
                 if (pid != null) {
+                    System.out.println("Found process PID: " + pid + " for " + masterInstance);
                     killProcess(pid);
-                    restartInstance(masterInstance);
+                } else {
+                    System.out.println("No process found for " + masterInstance);
                 }
+
+                // Restart the instance
+                restartInstance(masterInstance);
+                System.out.println(masterInstance + " has been restarted.");
             } catch (Exception e) {
-                System.err.println("Failed to restart: " + e.getMessage());
+                System.err.println("Failed to restart instance: " + e.getMessage());
             }
         });
     }
